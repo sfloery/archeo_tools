@@ -1,5 +1,8 @@
 <RCC>
     <qresource prefix="/plugins/ArcheoTool" >
-        <file>icon.png</file>
+        <file>icons/codes2geom.png</file>
+    </qresource>
+    <qresource prefix="/plugins/ArcheoTool" >
+        <file>icons/harris_matrix.png</file>
     </qresource>
 </RCC>
