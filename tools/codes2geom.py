@@ -65,8 +65,11 @@ class Codes2Geom():
         for codes in data:
             if codes["geometry"] == "POINT":
 
+                print len(codes["coords"])
+
                 # CREATE LAYER AND ADD COORDINATES
                 if len(codes["coords"]) != 0:
+
                     vl = QgsVectorLayer("Point?crs=EPSG:%s" % epsg, codes["name"], "memory")
                     pr = vl.dataProvider()
 
@@ -86,10 +89,8 @@ class Codes2Geom():
                     # because change of extent in provider is not propagated to the layer
                     vl.updateExtents()
                     # add layer to the legend
-                    QgsMapLayerRegistry.instance().addMapLayer(vl, False)
-                    node_vl = QgsLayerTreeLayer(vl)
-
-                    node_1.addLayer(node_vl)
+                    QgsMapLayerRegistry.instance().addMapLayer(vl)
+                    node_layer = node_1.addLayer(vl)
 
             elif codes["geometry"] == "POLYGON":
 
@@ -149,10 +150,10 @@ class Codes2Geom():
                     # update layer's extent when new features have been added
                     # because change of extent in provider is not propagated to the layer
                     vl.updateExtents()
+
                     # add layer to the legend
-                    QgsMapLayerRegistry.instance().addMapLayer(vl)
-                    node_vl = QgsLayerTreeLayer(vl)
-                    node_1.addLayer(node_vl)
+                    QgsMapLayerRegistry.instance().addMapLayer(vl, False)
+                    node_layer = node_1.addLayer(vl)
 
             # ==================================================================
 
@@ -255,6 +256,10 @@ class Codes2Geom():
 
                             code_group = code[group_start:group_end]
                             codes["groups"].append(code_group)
+                            codes["coords"].append([code, QgsPoint(float(line[e_pos]),float(line[n_pos])), line[h_pos]])
+
+                        elif codes["geometry"] == "POINT":
+                            code = line[code_pos]
                             codes["coords"].append([code, QgsPoint(float(line[e_pos]),float(line[n_pos])), line[h_pos]])
 
         #only leave distinct codes in the dictionary
