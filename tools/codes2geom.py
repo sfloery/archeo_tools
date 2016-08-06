@@ -6,9 +6,12 @@ from qgis.gui import *
 
 #from archeo_tools import ArcheoToolsDialog
 from ..gui.readcodes_dialog import ReadCodesToolDialog
+from ..gui.readcodes_preview_meas import ReadCodesPreviewMeas
+
 import re
 import random
 import string
+import os
 
 def random_string(size):
     char_set = string.ascii_uppercase + string.ascii_lowercase
@@ -30,6 +33,7 @@ class Codes2Geom():
 
         # Create the dialog (after translation) and keep reference
         self.dlg = ReadCodesToolDialog()
+        self.prev_window = ReadCodesPreviewMeas()
 
         # clear all txtboxes from any input
         self.dlg.txtbox_input_meas.clear()
@@ -46,6 +50,157 @@ class Codes2Geom():
         # connect buttons with theire actions if clicked
         self.dlg.button_load_meas.clicked.connect(self.select_meas_file)
         self.dlg.button_load_codes.clicked.connect(self.select_codes_file)
+        self.dlg.button_run_conversion.clicked.connect(self.run_conversion)
+
+        self.dlg.button_prev_meas.clicked.connect(self.open_meas_prev)
+
+    def run_conversion(self):
+        data = self.all_codes
+        epsg = self.epsg
+
+        root = QgsProject.instance().layerTreeRoot()
+        node_1 = root.insertGroup(0, self.measfile_name)
+
+        #LOOP THROGUH ALL CODES AND ADD THEM TO SHP/CANVAS
+        for codes in data:
+            if codes["geometry"] == "POINT":
+
+                # CREATE LAYER AND ADD COORDINATES
+                if len(codes["coords"]) != 0:
+                    vl = QgsVectorLayer("Point?crs=EPSG:%s" % epsg, codes["name"], "memory")
+                    pr = vl.dataProvider()
+
+                    vl.startEditing()
+                    pr.addAttributes([QgsField("name", QVariant.String),QgsField("code", QVariant.String), QgsField("height", QVariant.Double)])
+
+                    for coords in codes["coords"]:
+                        fet = QgsFeature()
+                        fet.setGeometry(QgsGeometry.fromPoint(coords[1]))
+                        fet.setAttributes([codes["name"], coords[0], coords[2]])
+                        pr.addFeatures([fet])
+
+                    # commit to stop editing the layer
+                    vl.commitChanges()
+
+                    # update layer's extent when new features have been added
+                    # because change of extent in provider is not propagated to the layer
+                    vl.updateExtents()
+                    # add layer to the legend
+                    QgsMapLayerRegistry.instance().addMapLayer(vl, False)
+                    node_vl = QgsLayerTreeLayer(vl)
+
+                    node_1.addLayer(node_vl)
+
+            elif codes["geometry"] == "POLYGON":
+
+                #codes["coords"] contains all codes, coordinates as QPoint and heights
+                #for all lines the fit the code previously
+                if len(codes["coords"]) != 0:
+
+                    # codes["groups"] contains all group ids that should indicate
+                    # separate polygons; for each group we create a new dicitionary
+                    # where add the groupid and the coordinates
+
+                    for groups in codes["groups"]:
+                        poly = []
+
+
+                        poly_dict = dict.fromkeys(["name", "coords"])
+                        poly_dict["name"] = groups
+                        poly_dict["coords"] = []
+
+
+                        group_start = int(codes["groupid"][0])
+                        group_len = int(codes["groupid"][1])
+                        group_end = group_start + group_len
+
+                        #now we loop thorugh all coords and check if the code
+                        #fits one of the groups; IF YES:
+                        for coords in codes["coords"]:
+                            if coords[0][group_start:group_end] == groups:
+
+                                #get the id
+                                coord_id = coords[0][group_end:]
+
+                                #append the coordinates to the group specific dictionary
+                                poly_dict["coords"].append(coords[1])
+
+                        #after all coords that fitch the group are found at the newly
+                        #created dictioanry to the codes["polygons"] dictionary
+                        codes["polygons"].append(poly_dict)
+
+                    #FOR EVERY CODE CREATE ONE SEPARATE LAYER:
+                    vl = QgsVectorLayer("Polygon?crs=EPSG:%s" % epsg, codes["name"], "memory")
+                    pr = vl.dataProvider()
+
+                    vl.startEditing()
+                    pr.addAttributes([QgsField("name", QVariant.String),QgsField("id", QVariant.String) ])#,QgsField("code", QVariant.String), QgsField("height", QVariant.Double)])
+
+                    #LOOP THROUGH THE POLYGONS
+                    for polys in codes["polygons"]:
+                        fet = QgsFeature()
+                        fet.setGeometry(QgsGeometry.fromPolygon([polys["coords"]]))
+                        fet.setAttributes([codes["name"], polys["name"]])#, coords[0], coords[2]])
+                        pr.addFeatures([fet])
+
+                    # commit to stop editing the layer
+                    vl.commitChanges()
+
+                    # update layer's extent when new features have been added
+                    # because change of extent in provider is not propagated to the layer
+                    vl.updateExtents()
+                    # add layer to the legend
+                    QgsMapLayerRegistry.instance().addMapLayer(vl)
+                    node_vl = QgsLayerTreeLayer(vl)
+                    node_1.addLayer(node_vl)
+
+            # ==================================================================
+
+
+
+
+    # ==========================================================================
+    # SHOW PREVIEW OF MEASUREMENT FILE IN EXTERNAL WINDOW
+    # ==========================================================================
+    def open_meas_prev(self):
+        all_lines = self.all_lines
+        field_del = self.del_char
+
+        #CODE POSITION: INDEX OF THE CODE FILE FOR EACH LINES
+        code_pos = self.code_pos
+        e_pos = self.e_pos
+        n_pos = self.n_pos
+        h_pos = self.h_pos
+
+        for line in all_lines:
+
+            #REDUCE NUMBER OF LINES CHECKED AS THEY SHOULD HAVE EXACLTY 4 ELEMENTS
+            #THEREFORE ALL THE OVERHEAD (LOG) IS SKIPPED
+            if len(line) == 4:
+
+                #LOOP THROUGH ALL CODES AND CHECK WHICH CODE FITS THIS SPECIFIC LINE
+                for codes in self.all_codes:
+                    if codes["regex"].match(line[0]):
+
+                        #ADD LINES TO PREVIEW
+                        if codes["geometry"] == "POINT":
+                            #if line contains code and coordinates add GREEN span tag before line and add everything to the txt_meas_preview txt_box
+                            self.prev_window.txt_meas_preview.insertHtml('<span style="background-color: #9FF781"; display:inline-block>POINT</span>%s<br>' % ("  " + field_del.join(line)))
+                        elif codes["geometry"] == "POLYGON":
+                            #if line contains code and coordinates add GREEN span tag before line and add everything to the txt_meas_preview txt_box
+                            self.prev_window.txt_meas_preview.insertHtml('<span style="background-color: #9FF781"; display:inline-block>POLY</span>%s<br>' % ("   " + field_del.join(line)))
+                        elif codes["geometry"] == "POLYLINE":
+                            #if line contains code and coordinates add GREEN span tag before line and add everything to the txt_meas_preview txt_box
+                            self.prev_window.txt_meas_preview.insertHtml('<span style="background-color: #9FF781"; display:inline-block>LINE</span>%s<br>' % ("   " + field_del.join(line)))
+
+            else:
+                #if not add RED span tag before line and add everything to the txt_meas_preview txt_box
+                self.prev_window.txt_meas_preview.insertHtml('<span style="background-color: #FA5858"; display:inline-block>NONE</span>  %s<br>' % (field_del.join(line)))
+
+        #open the window
+        self.prev_window.exec_()
+    # ==========================================================================
+
 
     def onClick_Icon(self):
         if self.act_codes.isChecked():
@@ -73,14 +228,18 @@ class Codes2Geom():
         meas_file_path = QFileDialog.getOpenFileName(self.dlg, "Select inpute file ","", '*.txt')
         self.dlg.txtbox_input_meas.setText(meas_file_path)
 
+        self.measfile_name = os.path.basename(meas_file_path).split(".")[0]
+
         #add all lines as list and strip line ending characters and split already
-        all_lines = [line.rstrip('\n').rstrip("\r").split(field_del) for line in open(meas_file_path)]
+        self.all_lines = [line.rstrip('\n').rstrip("\r").split(field_del) for line in open(meas_file_path)]
 
         # ======================================================================
         # LOOP THROUGH ALLE LINES OF MEASUREMENT FILE AND ADD COORDINATES TO
         # DICITIONARY "COORDS"
         # ======================================================================
-        for line in all_lines:
+
+        for line in self.all_lines:
+
             #REDUCE NUMBER OF LINES CHECKED AS THEY SHOULD HAVE EXACLTY 4 ELEMENTS
             #THEREFORE ALL THE OVERHEAD (LOG) IS SKIPPED
             if len(line) == 4:
@@ -88,36 +247,20 @@ class Codes2Geom():
                 #LOOP THROUGH ALL CODES AND CHECK WHICH CODE FITS THIS SPECIFIC LINE
                 for codes in self.all_codes:
                     if codes["regex"].match(line[0]):
-                        codes["coords"].append([line[code_pos], QgsPoint(float(line[e_pos]),float(line[n_pos])), line[h_pos]])
+                        if codes["geometry"] != "POINT":
+                            code = line[code_pos]
+                            group_start = int(codes["groupid"][0])
+                            group_len = int(codes["groupid"][1])
+                            group_end = group_start + group_len
 
+                            code_group = code[group_start:group_end]
+                            codes["groups"].append(code_group)
+                            codes["coords"].append([code, QgsPoint(float(line[e_pos]),float(line[n_pos])), line[h_pos]])
+
+        #only leave distinct codes in the dictionary
         for codes in self.all_codes:
-            if codes["geometry"] == "POINT":
-                # create layer
-                if len(codes["coords"]) != 0:
-                    vl = QgsVectorLayer("Point?crs=EPSG:%s" % epsg, codes["name"], "memory")
-                    pr = vl.dataProvider()
-
-                    vl.startEditing()
-                    pr.addAttributes([QgsField("name", QVariant.String),QgsField("code", QVariant.String), QgsField("height", QVariant.Double)])
-
-                    for coords in codes["coords"]:
-                        fet = QgsFeature()
-                        fet.setGeometry(QgsGeometry.fromPoint(coords[1]))
-                        fet.setAttributes([codes["name"], coords[0], coords[2]])
-                        pr.addFeatures([fet])
-
-                    # commit to stop editing the layer
-                    vl.commitChanges()
-
-                    # update layer's extent when new features have been added
-                    # because change of extent in provider is not propagated to the layer
-                    vl.updateExtents()
-                    # add layer to the legend
-                    QgsMapLayerRegistry.instance().addMapLayer(vl)
-            elif codes["geometry"] == "POLYGON":
-                # create layer
-                if len(codes["coords"]) != 0:
-                    pass
+            if codes["geometry"] != "POINT":
+                codes["groups"] = list(set(codes["groups"]))
 
         # ======================================================================
         # LOOP THROUGH ALL COORDINATES AND PROCESS GEOMETRY
@@ -136,8 +279,10 @@ class Codes2Geom():
             for i, line in enumerate(codes_file):
 
                 #create empty dicitionary that will be filled for each line
-                dict_code = dict.fromkeys(["name", "regex", "geometry", "groupby", "export", "coords"])
+                dict_code = dict.fromkeys(["name", "regex", "geometry", "groupby", "groupid", "polygon", "groups", "export", "coords"])
                 dict_code["coords"] = []
+                dict_code["groups"] = []
+                dict_code["polygons"] = []
                 #check if line is commented; if not continue:
                 if line[0] == '#':
                     if i == 2:
@@ -198,8 +343,10 @@ class Codes2Geom():
                         self.e_pos = e_pos
                         self.n_pos = n_pos
                         self.h_pos = h_pos
+                    # ==========================================================
 
-                    #GET EPSG CODE
+
+                    # GET EPSG CODE
                     if i == 2:
                         if "EPSG" in line:
                             epsg_code = line.split("#")[0].strip().split(":")[1]
@@ -207,12 +354,17 @@ class Codes2Geom():
                         else:
                             QMessageBox.information(None, "ERROR:", "NO EPSG CODE FOUND IN LINE %i..." % i)
                             return None
+                    # ==========================================================
 
 
                     # ==========================================================
                     # ALL OTHER LINES CONTAIN CODE
                     # ==========================================================
                     if i > 2:
+                        len_code = 0
+                        len_before = 0
+                        a = 0
+
                         #remove line feed character; \n unix; \r mac; \n\r windows
                         line = line.replace("\n","").replace("\r","")
 
@@ -260,6 +412,7 @@ class Codes2Geom():
                                 out_formats = line[geom_index+1].replace("[","").replace("]","").split("/")
                                 dict_code['export'] = out_formats
                                 dict_code['groupby'] = None
+
                             else:
                                 group_by = line[geom_index+1]
                                 out_formats = line[geom_index+2].replace("[","").replace("]","").split("/")
@@ -270,21 +423,39 @@ class Codes2Geom():
                             # LOOP THROUGH ALL CODE PARTS AND EXTRACT information
                             # ==================================================
                             code_parts = line[:geom_index]
+
+                            #GET LENGTH OF STRING BEFORE GROUP BY CODE
+                            for i in range(0, int(group_by)-1):
+                                if code_parts[i].isdigit():
+                                    len_code = int(code_parts[i])
+
+                                elif '"' in code_parts[i]:
+                                    raw_code = code_parts[i]
+                                    code = raw_code.replace('"',"")
+                                    len_code = len(code)
+
+                                elif code_parts[i].isalpha():
+                                    len_code = len(code_parts[i])
+
+                                len_before += len_code
+                            dict_code['groupid'] = [len_before]
+                            #===============================================
+
                             for i in range(0,len(code_parts)):
                                 digit_regex = None
                                 char_regex = None
                                 sep_regex = None
 
-                                # ======================================================
-                                # GET NUMBERS INDICATING NUMBER ranges
-                                # 1 --> [0 - 9]
-                                # 2 --> [00 - 99]
-                                # 3 --> [000 - 999]
-                                # 4 --> [0000 - 9999]
-                                # ======================================================
                                 if code_parts[i].isdigit():
-
+                                    # ==========================================
+                                    # GET NUMBERS INDICATING NUMBER ranges
+                                    # 1 --> [0 - 9]
+                                    # 2 --> [00 - 99]
+                                    # 3 --> [000 - 999]
+                                    # 4 --> [0000 - 9999]
+                                    # ==========================================
                                     nr_digits = code_parts[i]
+                                    len_code = int(nr_digits)
 
                                     if nr_digits == '1':
                                         #match all numbers from 0 to 9
@@ -323,6 +494,7 @@ class Codes2Geom():
                                 elif '"' in code_parts[i]:
                                     raw_code = code_parts[i]
                                     code = raw_code.replace('"',"")
+                                    len_code = len(code)
 
                                     if len(code) == 1:
                                         sep = code
@@ -330,14 +502,26 @@ class Codes2Geom():
                                     else:
                                         sep = ""
                                         sep_regex = re.compile("")
-                                # ======================================================
+                                # ==============================================
 
-                                # ======================================================
+                                # ==============================================
                                 # EXTRACT CODECS
                                 # CAN BE ANY COMBINATION of lower and UPPER case
-                                # ======================================================
+                                # ==============================================
                                 elif code_parts[i].isalpha():
                                     char_regex = re.compile(code_parts[i])
+                                    len_code = len(code_parts[i])
+                                # ==============================================
+
+                                # ==============================================
+                                # GET LENGTH OF CODE THAT GROUPS POLYGONS
+                                if i == int(group_by) - 1:
+                                    if geom_type == "POLYGON" or geom_type == "POLYLINE":
+                                        dict_code["groupid"].append(len_code)
+                                    else:
+                                        dict_code["groupid"] = None
+                                # ==============================================
+
 
                                 if char_regex != None:
                                     line_regex.append(char_regex.pattern)
@@ -347,6 +531,11 @@ class Codes2Geom():
 
                                 elif sep_regex != None:
                                     line_regex.append(sep_regex.pattern)
+
+                                #if geom_type == "POLYGON" or geom_type == "POLYLINE":
+
+                                    #-1: in the CODES FILE the GROUP BY STARTS WITH 1
+                                    #as we only need the places BEFORE the code we need
 
                             # ==================================================
                             # COMBINE ALL PARTS OF THE CODE
@@ -364,6 +553,12 @@ class Codes2Geom():
 
                             #save regex as compiled object in dictionary
                             dict_code['regex'] = re.compile(final_regex)
+
+
+
+
+
+
 
                         # ADD DICT CONTAINING CODE SCHEMA FOR THE LINE TO LIST
                         self.all_codes.append(dict_code)
@@ -385,10 +580,16 @@ class Codes2Geom():
 
         #["name", "regex", "geometry", "groupby", "export", "coordinates"]
         for codes in self.all_codes:
-            name = codes["name"]
+            name = codes["name"].replace('"', "")
             geom = codes["geometry"]
-            out = codes["export"]
-            self.dlg.txtbox_code_preview.insertHtml("%s %s %s<br>" % (name, geom, out))
+            out = '|'.join(codes["export"])
+
+            if codes["geometry"] != "POINT":
+                group = codes["groupid"]
+            else:
+                group = ""
+            #self.dlg.txtbox_code_preview.insertHtml("%s %s %s %s<br>" % (name, geom, out, group))
+            self.dlg.txtbox_code_preview.insertPlainText("%s\t%s\t%s\t%s\n" % (name, geom, out, group))
 
         # ======================================================================
         # SELECT CODES FILE FINISH
